@@ -91,12 +91,10 @@ async function checkAuth(req, res, next) {
   try {
     const cookies = req.headers.cookie;
     if (!cookies) return res.status(401).json({ error: 'Non authentifié (pas de cookies)' });
-    console.log('Vérification des cookies :', cookies);
     const response = await axios.post('https://oauth2.croci-monteiro.fr/api/verify', {}, {
       headers: { Cookie: cookies },
       withCredentials: true,
     });
-    console.log('Réponse d\'Authelia :', response);
     
     const headers = response.headers;
 
@@ -399,7 +397,6 @@ app.get('/whoami', checkAuth, (req, res) => {
   const displayName = req.userInfo.displayName || username;
   const email = req.userInfo.email || null;
   const isAdmin = req.userInfo.groups.includes('admin');
-    console.log(`Utilisateur connecté : ${username}, Admin : ${isAdmin}`);
   res.json({ username, displayName, email, isAdmin });
 });
 
@@ -477,7 +474,7 @@ app.get('/whoami', checkAuth, (req, res) => {
  *                   type: string
  */
 
-app.post('/add-message', requireAdmin, (req, res) => {
+app.post('/add-message', checkAuth, requireAdmin, (req, res) => {
   try {
     const { userId, type, title, content } = req.body;
     
@@ -546,7 +543,7 @@ app.post('/add-message', requireAdmin, (req, res) => {
  *                     type: boolean
  */
 
-app.get('/messages', checkAuth, (req, res) => {
+app.get('/messages', checkAuth, checkAuth, (req, res) => {
   try {
     const userEmail = req.userInfo.username; // l'email de l'utilisateur
     const messages = loadMessages();
@@ -589,7 +586,7 @@ app.get('/messages', checkAuth, (req, res) => {
  *                   type: string
  */
 
-app.delete('/delete-message/:id', requireAdmin, (req, res) => {
+app.delete('/delete-message/:id', checkAuth, requireAdmin, (req, res) => {
   try {
     const messageId = req.params.id;
     const messages = loadMessages();
@@ -659,7 +656,7 @@ app.delete('/delete-message/:id', requireAdmin, (req, res) => {
  *                   type: boolean
  */
 
-app.post('/update-message/:id', requireAdmin, (req, res) => {
+app.post('/update-message/:id', checkAuth, requireAdmin, (req, res) => {
   try {
     const messageId = req.params.id;
     const { type, title, content, dismissed } = req.body;
@@ -683,7 +680,7 @@ app.post('/update-message/:id', requireAdmin, (req, res) => {
   }
 });
 
-app.get('/user-ids', requireAdmin, (req, res) => {
+app.get('/user-ids', checkAuth, requireAdmin, (req, res) => {
   try {
     const users = loadUsers();
     
