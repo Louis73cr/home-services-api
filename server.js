@@ -11,6 +11,9 @@ const { auth } = require('express-openid-connect');
 require('dotenv').config();
 const cors = require('cors');
 
+// Activer les logs détaillés pour debugging OIDC
+process.env.DEBUG = 'express-openid-connect:*';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -100,22 +103,20 @@ const oidcConfig = {
   },
 };
 
-// Wrapper pour catcher les erreurs du middleware auth
-app.use((req, res, next) => {
-  const authMiddleware = auth(oidcConfig);
-  authMiddleware(req, res, (err) => {
-    if (err) {
-      console.error('❌ Erreur interceptée dans auth middleware:');
-      console.error('   Nom:', err.name);
-      console.error('   Message:', err.message);
-      console.error('   URL:', req.url);
-      console.error('   Stack:', err.stack);
-      
-      // Rediriger vers le frontend avec erreur
-      return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=${encodeURIComponent(err.message)}`);
-    }
-    next();
-  });
+// Appliquer le middleware auth une seule fois
+app.use(auth(oidcConfig));
+
+// Middleware spécifique pour gérer les erreurs de callback
+app.use((err, req, res, next) => {
+  if (err && err.name === 'BadRequestError' && req.path === '/callback') {
+    console.error('❌ Erreur interceptée au callback:');
+    console.error('   Message:', err.message);
+    console.error('   URL:', req.url);
+    
+    // Rediriger vers le frontend avec erreur
+    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=${encodeURIComponent('Authentication failed')}`);
+  }
+  next(err);
 });
 
 const uploadFolder = './uploads';
