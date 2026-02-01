@@ -79,7 +79,7 @@ const oidcConfig = {
     cookie: {
       httpOnly: true,
       secure: true, // Toujours sécurisé en HTTPS
-      sameSite: 'none', // Permet les requêtes cross-site (API et frontend sur domaines différents)
+      sameSite: 'None', // Permet les requêtes cross-site (API et frontend sur domaines différents)
       domain: '.oauth2.croci-monteiro.fr', // Cookie partagé entre tous les sous-domaines *.oauth2.croci-monteiro.fr
     },
     rolling: true,
