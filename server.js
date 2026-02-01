@@ -24,6 +24,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Configuration pour proxy de confiance (derrière reverse proxy)
+app.set('trust proxy', 1);
+
 // Middleware de logging pour toutes les requêtes
 app.use((req, res, next) => {
   const startTime = Date.now();
@@ -70,6 +73,24 @@ const oidcConfig = {
     callback: '/callback',
     login: '/login',
     logout: '/logout',
+    postLogoutRedirect: process.env.CORS_ORIGIN,
+  },
+  session: {
+    cookie: {
+      httpOnly: true,
+      secure: true, // Toujours sécurisé en HTTPS
+      sameSite: 'none', // Permet les requêtes cross-site (API et frontend sur domaines différents)
+      domain: '.oauth2.croci-monteiro.fr', // Cookie partagé entre tous les sous-domaines *.oauth2.croci-monteiro.fr
+    },
+    rolling: true,
+    rollingDuration: 24 * 60 * 60, // 24 heures
+  },
+  afterCallback: async (req, res, session) => {
+    // Après le callback réussi, rediriger vers le frontend
+    return {
+      ...session,
+      returnTo: process.env.CORS_ORIGIN,
+    };
   },
 };
 
@@ -228,15 +249,6 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 app.use('/uploads', express.static(uploadFolder));
-
-// Route de redirection après callback OIDC réussi
-app.get('/callback', (req, res, next) => {
-  // express-openid-connect gère automatiquement le callback
-  // On redirige ensuite vers le frontend
-  const returnTo = req.query.returnTo || process.env.CORS_ORIGIN || 'https://myapp.oauth2.croci-monteiro.fr';
-  console.log(`✅ Callback OIDC réussi, redirection vers: ${returnTo}`);
-  res.redirect(returnTo);
-});
 
 // Route /whoami pour obtenir les infos utilisateur
 app.get('/whoami', checkAuth, (req, res) => {
