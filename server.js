@@ -35,9 +35,9 @@ const OAUTH_CONFIG = {
   clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
   issuer: process.env.AUTHENTIK_ISSUER,
   redirectUri: `${process.env.BASE_URL}/callback`,
-  tokenEndpoint: `${process.env.AUTHENTIK_ISSUER}token/`,
+  tokenEndpoint: `https://connect.croci-monteiro.fr/application/o/token/`,
   authorizationEndpoint: `https://connect.croci-monteiro.fr/application/o/authorize/`,
-  userInfoEndpoint: `${process.env.AUTHENTIK_ISSUER}userinfo/`,
+  userInfoEndpoint: `https://connect.croci-monteiro.fr/application/o/userinfo/`,
   scope: 'openid profile email groups',
 };
 
