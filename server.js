@@ -57,6 +57,11 @@ app.use((req, res, next) => {
 });
 
 // Configuration OIDC avec Authentik
+console.log('🔧 Configuration OIDC:');
+console.log('   BASE_URL:', process.env.BASE_URL);
+console.log('   CORS_ORIGIN:', process.env.CORS_ORIGIN);
+console.log('   AUTHENTIK_ISSUER:', process.env.AUTHENTIK_ISSUER);
+
 const oidcConfig = {
   authRequired: false,
   auth0Logout: true,
@@ -87,6 +92,7 @@ const oidcConfig = {
   },
   afterCallback: async (req, res, session) => {
     // Après le callback réussi, rediriger vers le frontend
+    console.log('✅ Callback OIDC réussi, session créée pour:', session.claims?.email || session.claims?.sub);
     return {
       ...session,
       returnTo: process.env.CORS_ORIGIN,
@@ -94,7 +100,23 @@ const oidcConfig = {
   },
 };
 
-app.use(auth(oidcConfig));
+// Wrapper pour catcher les erreurs du middleware auth
+app.use((req, res, next) => {
+  const authMiddleware = auth(oidcConfig);
+  authMiddleware(req, res, (err) => {
+    if (err) {
+      console.error('❌ Erreur interceptée dans auth middleware:');
+      console.error('   Nom:', err.name);
+      console.error('   Message:', err.message);
+      console.error('   URL:', req.url);
+      console.error('   Stack:', err.stack);
+      
+      // Rediriger vers le frontend avec erreur
+      return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=${encodeURIComponent(err.message)}`);
+    }
+    next();
+  });
+});
 
 const uploadFolder = './uploads';
 if (!fs.existsSync(uploadFolder)) fs.mkdirSync(uploadFolder);
@@ -477,6 +499,25 @@ app.delete('/delete-service/:id', checkAuth, requireAdmin, (req, res) => {
 
   saveServices(services);
   res.json({ status: 'supprimé', id });
+});
+
+// Gestionnaire d'erreur global pour les erreurs OIDC
+app.use((err, req, res, next) => {
+  if (err.name === 'BadRequestError' && err.message.includes('invalid_grant')) {
+    console.error('❌ Erreur OIDC invalid_grant:');
+    console.error('   URL de callback:', req.url);
+    console.error('   Cookies présents:', req.headers.cookie ? 'Oui' : 'Non');
+    console.error('   Détails:', err.message);
+    
+    // Rediriger vers le frontend avec un message d'erreur
+    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=invalid_grant`);
+  }
+  
+  // Autres erreurs
+  console.error('❌ Erreur serveur:', err);
+  res.status(err.status || 500).json({ 
+    error: err.message || 'Erreur interne du serveur' 
+  });
 });
 
 app.listen(PORT, () => {
