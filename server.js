@@ -106,6 +106,20 @@ const oidcConfig = {
 // Appliquer le middleware auth une seule fois
 app.use(auth(oidcConfig));
 
+// Middleware pour logger les détails du callback AVANT traitement
+app.use('/callback', (req, res, next) => {
+  console.log('🔍 Détails du callback:');
+  console.log('   Full URL:', `${req.protocol}://${req.get('host')}${req.originalUrl}`);
+  console.log('   BASE_URL configuré:', process.env.BASE_URL);
+  console.log('   redirect_uri attendu:', `${process.env.BASE_URL}/callback`);
+  console.log('   Headers X-Forwarded:', {
+    proto: req.headers['x-forwarded-proto'],
+    host: req.headers['x-forwarded-host'],
+    for: req.headers['x-forwarded-for']
+  });
+  next();
+});
+
 // Middleware spécifique pour gérer les erreurs de callback
 app.use((err, req, res, next) => {
   if (err && err.name === 'BadRequestError' && req.path === '/callback') {
