@@ -78,6 +78,26 @@ function getGravatarUrl(email) {
   return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
 }
 
+// Helper pour logger les requêtes
+function logRequest(method, path, status, details = {}) {
+  const timestamp = new Date().toISOString();
+  const emoji = status >= 200 && status < 300 ? '✅' : status >= 400 ? '❌' : '➡️';
+  
+  console.log(`${emoji} [${timestamp}] ${method} ${path} - ${status}`);
+  
+  if (details.user) {
+    console.log(`   User: ${details.user}`);
+  }
+  
+  if (details.error) {
+    console.error(`   Erreur:`, details.error);
+  }
+  
+  if (details.info) {
+    console.log(`   Info:`, details.info);
+  }
+}
+
 // Obtient une instance Prisma Client configurée pour Cloudflare Workers
 function getPrisma(databaseUrl) {
   if (!databaseUrl) {
@@ -206,14 +226,19 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
+    
+    // Log de la requête entrante
+    console.log(`\n➡️  [${new Date().toISOString()}] ${method} ${path}`);
 
     // Gestion CORS preflight
     if (method === 'OPTIONS') {
+      logRequest(method, path, 204, { info: 'CORS preflight' });
       return corsResponse();
     }
 
     const databaseUrl = env.DATABASE_URL;
     if (!databaseUrl) {
+      logRequest(method, path, 500, { error: 'DATABASE_URL manquante' });
       return jsonResponse({ error: 'Configuration de base de données manquante' }, 500);
     }
 
@@ -221,11 +246,18 @@ export default {
     if (path === '/whoami' && method === 'GET') {
       const authResult = await checkAuth(request, env);
       if (authResult.error) {
+        logRequest(method, path, authResult.status, { error: authResult.error });
         return jsonResponse({ error: authResult.error }, authResult.status);
       }
 
       const { userInfo } = authResult;
       const isAdmin = userInfo.groups.includes('admin');
+      
+      logRequest(method, path, 200, { 
+        user: userInfo.username,
+        info: `Admin: ${isAdmin}, Groupes: [${userInfo.groups.join(', ')}]`
+      });
+      
       return jsonResponse({
         username: userInfo.username,
         displayName: userInfo.displayName || userInfo.username,
@@ -239,6 +271,7 @@ export default {
     if (path === '/services' && method === 'GET') {
       const authResult = await checkAuth(request, env);
       if (authResult.error) {
+        logRequest(method, path, authResult.status, { error: authResult.error });
         return jsonResponse({ error: authResult.error }, authResult.status);
       }
 
@@ -246,6 +279,8 @@ export default {
       try {
         const services = await prisma.service.findMany();
         const userGroups = authResult.userInfo.groups || [];
+        
+        console.log(`   Filtrage services pour groupes: [${userGroups.join(', ')}]`);
         
         // Filtrer les services selon les groupes de l'utilisateur
         const filteredServices = services.filter((s) =>
@@ -270,9 +305,15 @@ export default {
           return serviceData;
         });
 
+        logRequest(method, path, 200, { 
+          user: authResult.userInfo.username,
+          info: `${filteredServices.length} service(s) accessible(s)`
+        });
+        
         return jsonResponse(servicesWithUrls);
       } catch (error) {
         console.error('Erreur lors de la récupération des services:', error);
+        logRequest(method, path, 500, { error: error.message });
         return jsonResponse({ error: 'Erreur lors de la récupération des services' }, 500);
       } finally {
         await prisma.$disconnect();

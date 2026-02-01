@@ -23,6 +23,35 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Middleware de logging pour toutes les requêtes
+app.use((req, res, next) => {
+  const startTime = Date.now();
+  const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Logger la requête entrante
+  console.log(`\n➡️  [${new Date().toISOString()}] [${requestId}]`);
+  console.log(`   Méthode: ${req.method}`);
+  console.log(`   Path: ${req.path}`);
+  console.log(`   User: ${req.oidc?.user?.email || req.userInfo?.username || 'Non authentifié'}`);
+  
+  // Intercepter la réponse
+  const originalJson = res.json;
+  res.json = function(data) {
+    const duration = Date.now() - startTime;
+    
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      console.log(`✅ [${requestId}] Succès ${res.statusCode} - ${req.method} ${req.path} (${duration}ms)`);
+    } else if (res.statusCode >= 400) {
+      console.error(`❌ [${requestId}] Erreur ${res.statusCode} - ${req.method} ${req.path} (${duration}ms)`);
+      console.error(`   Détails:`, data);
+    }
+    
+    return originalJson.call(this, data);
+  };
+  
+  next();
+});
+
 // Configuration OIDC avec Authentik
 const oidcConfig = {
   authRequired: false,
@@ -85,28 +114,6 @@ function saveServices(services) {
   fs.writeFileSync(SERVICES_FILE, JSON.stringify(services, null, 2));
 }
 
-<<<<<<< HEAD
-/** Génère l'URL Gravatar depuis l'email */
-function getGravatarUrl(email) {
-  if (!email) return null;
-  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
-  return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
-}
-
-/** Auth middleware - interroge Authentik via /api/verify */
-async function checkAuth(req, res, next) {
-  try {
-    const cookies = req.headers.cookie;
-    if (!cookies) return res.status(401).json({ error: 'Non authentifié (pas de cookies)' });
-    console.log('Vérification des cookies :', cookies);
-    const response = await axios.post('https://oauth2.croci-monteiro.fr/api/verify', {}, {
-      headers: { Cookie: cookies },
-      withCredentials: true,
-    });
-    console.log('Réponse d\'Authentik :', response);
-    
-    const headers = response.headers;
-=======
 function loadMessages() {
   try {
     return JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
@@ -114,7 +121,6 @@ function loadMessages() {
     return [];
   }
 }
->>>>>>> c1d65dab4f5e7fb92a83d255221886a04727cf88
 
 function saveMessages(messages) {
   fs.writeFileSync(MESSAGES_FILE, JSON.stringify(messages, null, 2));
@@ -132,6 +138,13 @@ function saveFavorites(favorites) {
   fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2));
 }
 
+/** Génère l'URL Gravatar depuis l'email */
+function getGravatarUrl(email) {
+  if (!email) return null;
+  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+  return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
+}
+
 /** Auth middleware - vérifie l'authentification OIDC */
 function checkAuth(req, res, next) {
   if (!req.oidc.isAuthenticated()) {
@@ -143,40 +156,27 @@ function checkAuth(req, res, next) {
     const username = oidcUser.email || oidcUser.sub;
     const users = loadUsers();
     
-    const email = headers['remote-email'] || null;
-    const displayName = headers['remote-name'] || null;
-    
-    // Récupérer les groupes depuis les headers Authentik
-    // Authentik peut envoyer les groupes via 'remote-groups' ou 'x-authentik-groups'
-    const groupsHeader = headers['remote-groups'] || headers['x-authentik-groups'] || '';
-    const groups = groupsHeader.split(',').map(g => g.trim()).filter(g => g);
+    const email = oidcUser.email || null;
+    const displayName = oidcUser.name || oidcUser.preferred_username || null;
+    const groups = oidcUser.groups || [];
     
     // Générer l'URL Gravatar
     const avatarUrl = getGravatarUrl(email);
 
     // Met à jour ou crée l'utilisateur dans le JSON local
     users[username] = {
-<<<<<<< HEAD
       email,
       displayName,
       avatarUrl,
       groups,
-=======
-      email: oidcUser.email || null,
-      displayName: oidcUser.name || oidcUser.preferred_username || null,
-      groups: oidcUser.groups || [],
->>>>>>> c1d65dab4f5e7fb92a83d255221886a04727cf88
     };
     saveUsers(users);
 
     req.userInfo = { username, ...users[username] };
     next();
   } catch (error) {
-<<<<<<< HEAD
-    return res.status(401).json({ error: 'Accès refusé par Authentik', details: error?.response?.data });
-=======
+    console.error('❌ Erreur auth:', error.message);
     return res.status(500).json({ error: 'Erreur lors de la récupération des informations utilisateur', details: error.message });
->>>>>>> c1d65dab4f5e7fb92a83d255221886a04727cf88
   }
 }
 
@@ -240,12 +240,21 @@ app.use('/uploads', express.static(uploadFolder));
  *         description: Liste des services filtrée selon les groupes
  */
 app.get('/services', checkAuth, (req, res) => {
-  const userGroups = req.userInfo.groups || [];
-  // Retourne uniquement les services où au moins un groupe de l'user est autorisé
-  const filteredServices = services.filter(s => 
-    s.allowedGroups?.some(g => userGroups.includes(g))
-  );
-  res.json(filteredServices);
+  try {
+    const userGroups = req.userInfo.groups || [];
+    console.log(`🔍 Filtrage services pour groupes: [${userGroups.join(', ')}]`);
+    
+    // Retourne uniquement les services où au moins un groupe de l'user est autorisé
+    const filteredServices = services.filter(s => 
+      s.allowedGroups?.some(g => userGroups.includes(g))
+    );
+    
+    console.log(`   → ${filteredServices.length} service(s) accessible(s)`);
+    res.json(filteredServices);
+  } catch (error) {
+    console.error('❌ Erreur /services:', error.message);
+    res.status(500).json({ error: 'Erreur lors de la récupération des services' });
+  }
 });
 
 /**

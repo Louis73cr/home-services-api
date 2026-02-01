@@ -45,6 +45,26 @@ function getGravatarUrl(email) {
   return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
 }
 
+// Helper pour logger les requêtes
+function logRequest(method, path, status, details = {}) {
+  const timestamp = new Date().toISOString();
+  const emoji = status >= 200 && status < 300 ? '✅' : status >= 400 ? '❌' : '➡️';
+  
+  console.log(`${emoji} [${timestamp}] ${method} ${path} - ${status}`);
+  
+  if (details.user) {
+    console.log(`   User: ${details.user}`);
+  }
+  
+  if (details.error) {
+    console.error(`   Erreur:`, details.error);
+  }
+  
+  if (details.info) {
+    console.log(`   Info:`, details.info);
+  }
+}
+
 // Helper pour les réponses JSON avec CORS
 function jsonResponse(data, status = 200, options = {}) {
   const corsHeaders = {
@@ -207,14 +227,19 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname.replace('/api/', ''); // Pages Functions ajoute /api/ automatiquement
   const method = request.method;
+  
+  // Log de la requête entrante
+  console.log(`\n➡️  [${new Date().toISOString()}] ${method} /${path}`);
 
   // Gestion CORS preflight
   if (method === 'OPTIONS') {
+    logRequest(method, path, 204, { info: 'CORS preflight' });
     return corsResponse();
   }
 
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) {
+    logRequest(method, path, 500, { error: 'DATABASE_URL manquante' });
     return jsonResponse({ error: 'Configuration de base de données manquante' }, 500);
   }
 
@@ -222,11 +247,18 @@ export async function onRequest(context) {
   if (path === 'whoami' && method === 'GET') {
     const authResult = await checkAuth(request, env);
     if (authResult.error) {
+      logRequest(method, path, authResult.status, { error: authResult.error });
       return jsonResponse({ error: authResult.error }, authResult.status);
     }
 
     const { userInfo } = authResult;
     const isAdmin = userInfo.groups.includes('admin');
+    
+    logRequest(method, path, 200, { 
+      user: userInfo.username,
+      info: `Admin: ${isAdmin}, Groupes: [${userInfo.groups.join(', ')}]`
+    });
+    
     return jsonResponse({
       username: userInfo.username,
       displayName: userInfo.displayName || userInfo.username,
