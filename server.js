@@ -7,6 +7,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const axios = require('axios');
 const crypto = require('crypto');
+const { auth } = require('express-openid-connect');
 require('dotenv').config();
 const cors = require('cors');
 
