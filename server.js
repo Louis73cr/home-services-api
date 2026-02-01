@@ -103,12 +103,9 @@ const oidcConfig = {
   },
 };
 
-// Appliquer le middleware auth une seule fois
-app.use(auth(oidcConfig));
-
-// Middleware pour logger les détails du callback AVANT traitement
+// Middleware pour logger les détails du callback AVANT traitement par auth()
 app.use('/callback', (req, res, next) => {
-  console.log('🔍 Détails du callback:');
+  console.log('🔍 Détails du callback AVANT traitement:');
   console.log('   Full URL:', `${req.protocol}://${req.get('host')}${req.originalUrl}`);
   console.log('   BASE_URL configuré:', process.env.BASE_URL);
   console.log('   redirect_uri attendu:', `${process.env.BASE_URL}/callback`);
@@ -119,6 +116,9 @@ app.use('/callback', (req, res, next) => {
   });
   next();
 });
+
+// Appliquer le middleware auth une seule fois
+app.use(auth(oidcConfig));
 
 // Middleware spécifique pour gérer les erreurs de callback
 app.use((err, req, res, next) => {
