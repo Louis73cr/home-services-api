@@ -5,15 +5,15 @@ const fs = require('fs');
 const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
-const axios = require('axios');
+const { auth, requiresAuth } = require('express-openid-connect');
 require('dotenv').config();
 const cors = require('cors');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const corsOptions = {
-  origin: 'https://myapp.oauth2.croci-monteiro.fr',
+  origin: process.env.CORS_ORIGIN,
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -21,6 +21,28 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+
+// Configuration OIDC avec Authentik
+const oidcConfig = {
+  authRequired: false,
+  auth0Logout: true,
+  secret: process.env.SESSION_SECRET,
+  baseURL: process.env.BASE_URL,
+  clientID: process.env.AUTHENTIK_CLIENT_ID,
+  clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
+  issuerBaseURL: process.env.AUTHENTIK_ISSUER,
+  authorizationParams: {
+    response_type: 'code',
+    scope: 'openid profile email groups',
+  },
+  routes: {
+    callback: '/callback',
+    login: '/login',
+    logout: '/logout',
+  },
+};
+
+app.use(auth(oidcConfig));
 
 const uploadFolder = './uploads';
 if (!fs.existsSync(uploadFolder)) fs.mkdirSync(uploadFolder);
@@ -86,35 +108,29 @@ function saveFavorites(favorites) {
   fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2));
 }
 
-/** Auth middleware - interroge Authelia via /api/verify */
-async function checkAuth(req, res, next) {
+/** Auth middleware - vérifie l'authentification OIDC */
+function checkAuth(req, res, next) {
+  if (!req.oidc.isAuthenticated()) {
+    return res.status(401).json({ error: 'Non authentifié' });
+  }
+
   try {
-    const cookies = req.headers.cookie;
-    if (!cookies) return res.status(401).json({ error: 'Non authentifié (pas de cookies)' });
-    const response = await axios.post('https://oauth2.croci-monteiro.fr/api/verify', {}, {
-      headers: { Cookie: cookies },
-      withCredentials: true,
-    });
-    
-    const headers = response.headers;
-
-    const username = headers['remote-user'];
-    if (!username) return res.status(401).json({ error: 'Non authentifié' });
-
+    const oidcUser = req.oidc.user;
+    const username = oidcUser.email || oidcUser.sub;
     const users = loadUsers();
 
     // Met à jour ou crée l'utilisateur dans le JSON local
     users[username] = {
-    email: headers['remote-email'] || null,
-    displayName: headers['remote-name'] || null,
-    groups: headers['remote-groups']?.split(',') || [],
+      email: oidcUser.email || null,
+      displayName: oidcUser.name || oidcUser.preferred_username || null,
+      groups: oidcUser.groups || [],
     };
     saveUsers(users);
 
     req.userInfo = { username, ...users[username] };
     next();
   } catch (error) {
-    return res.status(401).json({ error: 'Accès refusé par Authelia', details: error?.response?.data });
+    return res.status(500).json({ error: 'Erreur lors de la récupération des informations utilisateur', details: error.message });
   }
 }
 
@@ -139,7 +155,7 @@ const swaggerDefinition = {
     version: '1.0.0',
     description: 'API pour gérer des services avec image et redirection, accès contrôlé par groupes.',
   },
-  servers: [{ url: 'https://localhost:3000' }, { url: 'https://api-myapp-oauth2.croci-monteiro.fr' }],
+  servers: [{ url: `http://localhost:${PORT}` }, { url: process.env.BASE_URL }],
   components: {
     securitySchemes: {
       RemoteUserAuth: {
@@ -434,7 +450,7 @@ app.get('/whoami', checkAuth, (req, res) => {
  * @swagger
  * /add-message:
  *   post:
- *     summary: Ajouter un nouveau message pour un utilisateur (admin uniquement)
+ *     summary: Ajouter un nouveau message pour un ou plusieurs utilisateurs (admin uniquement)
  *     security:
  *       - RemoteUserAuth: []
  *     requestBody:
@@ -450,8 +466,13 @@ app.get('/whoami', checkAuth, (req, res) => {
  *               - content
  *             properties:
  *               userId:
- *                 type: string
- *                 description: Email de l'utilisateur destinataire
+ *                 oneOf:
+ *                   - type: string
+ *                     description: Email d'un seul utilisateur destinataire
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                     description: Array d'emails de plusieurs utilisateurs destinataires
  *               type:
  *                 type: string
  *                 enum: ['information', 'warning', 'error']
@@ -464,14 +485,16 @@ app.get('/whoami', checkAuth, (req, res) => {
  *                 description: Contenu du message
  *     responses:
  *       201:
- *         description: Message créé avec succès
+ *         description: Message(s) créé(s) avec succès
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 message_id:
- *                   type: string
+ *                 message_ids:
+ *                   type: array
+ *                   items:
+ *                     type: string
  */
 
 app.post('/add-message', checkAuth, requireAdmin, (req, res) => {
@@ -487,20 +510,29 @@ app.post('/add-message', checkAuth, requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'Type invalide. Doit être: information, warning ou error' });
     }
 
-    const messages = loadMessages();
-    const newMessage = {
-      id: Date.now().toString(),
-      userId, // email
-      type,
-      title,
-      content,
-      createdAt: new Date().toISOString(),
-      dismissed: false // pour les messages information
-    };
+    // Convertir userId en array si c'est un string
+    const userIds = Array.isArray(userId) ? userId : [userId];
 
-    messages.push(newMessage);
+    const messages = loadMessages();
+    const messageIds = [];
+
+    // Créer un message pour chaque utilisateur
+    userIds.forEach(email => {
+      const newMessage = {
+        id: Date.now().toString() + Math.random(),
+        userId: email,
+        type,
+        title,
+        content,
+        createdAt: new Date().toISOString(),
+        dismissed: false
+      };
+      messages.push(newMessage);
+      messageIds.push(newMessage.id);
+    });
+
     saveMessages(messages);
-    res.status(201).json({ message_id: newMessage.id });
+    res.status(201).json({ message_ids: messageIds });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur lors de l\'ajout du message' });
@@ -543,7 +575,7 @@ app.post('/add-message', checkAuth, requireAdmin, (req, res) => {
  *                     type: boolean
  */
 
-app.get('/messages', checkAuth, checkAuth, (req, res) => {
+app.get('/messages', checkAuth, (req, res) => {
   try {
     const userEmail = req.userInfo.username; // l'email de l'utilisateur
     const messages = loadMessages();
@@ -552,6 +584,56 @@ app.get('/messages', checkAuth, checkAuth, (req, res) => {
     const userMessages = messages.filter(m => m.userId === userEmail && !m.dismissed);
     
     res.json(userMessages);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur lors de la récupération des messages' });
+  }
+});
+
+/**
+ * @swagger
+ * /all-messages:
+ *   get:
+ *     summary: Récupère tous les messages non supprimés (admin uniquement)
+ *     security:
+ *       - RemoteUserAuth: []
+ *     responses:
+ *       200:
+ *         description: Liste de tous les messages (admin uniquement)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: string
+ *                   userId:
+ *                     type: string
+ *                     description: Email destinataire
+ *                   type:
+ *                     type: string
+ *                     enum: ['information', 'warning', 'error']
+ *                   title:
+ *                     type: string
+ *                   content:
+ *                     type: string
+ *                   createdAt:
+ *                     type: string
+ *                     format: date-time
+ *                   dismissed:
+ *                     type: boolean
+ */
+
+app.get('/all-messages', checkAuth, requireAdmin, (req, res) => {
+  try {
+    const messages = loadMessages();
+    
+    // Retourne tous les messages non supprimés (admin uniquement)
+    const allMessages = messages.filter(m => !m.dismissed);
+    
+    res.json(allMessages);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur lors de la récupération des messages' });
