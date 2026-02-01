@@ -36,7 +36,7 @@ const OAUTH_CONFIG = {
   issuer: process.env.AUTHENTIK_ISSUER,
   redirectUri: `${process.env.BASE_URL}/callback`,
   tokenEndpoint: `${process.env.AUTHENTIK_ISSUER}token/`,
-  authorizationEndpoint: `${process.env.AUTHENTIK_ISSUER.replace('/o/', '/application/o/')}authorize/`,
+  authorizationEndpoint: `https://connect.croci-monteiro.fr/application/o/authorize/`,
   userInfoEndpoint: `${process.env.AUTHENTIK_ISSUER}userinfo/`,
   scope: 'openid profile email groups',
 };
@@ -332,20 +332,20 @@ function getGravatarUrl(email) {
   return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
 }
 
-/** Auth middleware - vérifie l'authentification OIDC */
+/** Auth middleware - vérifie l'authentification OAuth2 */
 function checkAuth(req, res, next) {
-  if (!req.oidc.isAuthenticated()) {
+  if (!req.user) {
     return res.status(401).json({ error: 'Non authentifié' });
   }
 
   try {
-    const oidcUser = req.oidc.user;
-    const username = oidcUser.email || oidcUser.sub;
+    const oauthUser = req.user;
+    const username = oauthUser.email || oauthUser.preferred_username || oauthUser.sub;
     const users = loadUsers();
     
-    const email = oidcUser.email || null;
-    const displayName = oidcUser.name || oidcUser.preferred_username || null;
-    const groups = oidcUser.groups || [];
+    const email = oauthUser.email || null;
+    const displayName = oauthUser.name || oauthUser.preferred_username || null;
+    const groups = oauthUser.groups || [];
     
     // Générer l'URL Gravatar
     const avatarUrl = getGravatarUrl(email);
