@@ -6,6 +6,7 @@ const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const axios = require('axios');
+const crypto = require('crypto');
 require('dotenv').config();
 const cors = require('cors');
 
@@ -60,7 +61,14 @@ function saveServices(services) {
   fs.writeFileSync(SERVICES_FILE, JSON.stringify(services, null, 2));
 }
 
-/** Auth middleware - interroge Authelia via /api/verify */
+/** Génère l'URL Gravatar depuis l'email */
+function getGravatarUrl(email) {
+  if (!email) return null;
+  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+  return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
+}
+
+/** Auth middleware - interroge Authentik via /api/verify */
 async function checkAuth(req, res, next) {
   try {
     const cookies = req.headers.cookie;
@@ -70,7 +78,7 @@ async function checkAuth(req, res, next) {
       headers: { Cookie: cookies },
       withCredentials: true,
     });
-    console.log('Réponse d\'Authelia :', response);
+    console.log('Réponse d\'Authentik :', response);
     
     const headers = response.headers;
 
@@ -78,19 +86,31 @@ async function checkAuth(req, res, next) {
     if (!username) return res.status(401).json({ error: 'Non authentifié' });
 
     const users = loadUsers();
+    
+    const email = headers['remote-email'] || null;
+    const displayName = headers['remote-name'] || null;
+    
+    // Récupérer les groupes depuis les headers Authentik
+    // Authentik peut envoyer les groupes via 'remote-groups' ou 'x-authentik-groups'
+    const groupsHeader = headers['remote-groups'] || headers['x-authentik-groups'] || '';
+    const groups = groupsHeader.split(',').map(g => g.trim()).filter(g => g);
+    
+    // Générer l'URL Gravatar
+    const avatarUrl = getGravatarUrl(email);
 
     // Met à jour ou crée l'utilisateur dans le JSON local
     users[username] = {
-    email: headers['remote-email'] || null,
-    displayName: headers['remote-name'] || null,
-    groups: headers['remote-groups']?.split(',') || [],
+      email,
+      displayName,
+      avatarUrl,
+      groups,
     };
     saveUsers(users);
 
     req.userInfo = { username, ...users[username] };
     next();
   } catch (error) {
-    return res.status(401).json({ error: 'Accès refusé par Authelia', details: error?.response?.data });
+    return res.status(401).json({ error: 'Accès refusé par Authentik', details: error?.response?.data });
   }
 }
 

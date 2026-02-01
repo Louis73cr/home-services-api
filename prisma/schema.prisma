@@ -1,0 +1,42 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  username    String   @unique
+  email       String?
+  displayName String?
+  avatarUrl   String?
+  groups      String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Service {
+  id             String   @id @default(cuid())
+  name           String
+  redirectUrl    String
+  allowedGroups  String[] @default([])
+  imagePath      String   // Chemin vers l'image dans R2
+  originalWidth  Int?
+  originalHeight Int?
+  resizedHeight  Int      @default(50)
+  resizedWidth   Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("services")
+}
+

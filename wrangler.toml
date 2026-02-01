@@ -1,0 +1,20 @@
+name = "home-services-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Configuration R2 pour les images
+[[r2_buckets]]
+binding = "IMAGES_R2"
+bucket_name = "images-bucket"  # Nom de votre bucket R2
+
+# Variables d'environnement
+[vars]
+# DATABASE_URL sera défini via les secrets Cloudflare (recommandé pour la sécurité)
+# Vous pouvez aussi le définir ici pour le développement local, mais utilisez des secrets en production
+# DATABASE_URL = "postgresql://user:password@host:5432/database"
+
+# Routes (optionnel - pour Pages Functions)
+# routes = [
+#   { pattern = "api/*", zone_name = "your-domain.com" }
+# ]
+
