@@ -7,21 +7,20 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const axios = require('axios');
 const crypto = require('crypto');
-const { auth } = require('express-openid-connect');
 require('dotenv').config();
 const cors = require('cors');
 
-// Activer les logs détaillés pour debugging OIDC
-process.env.DEBUG = 'express-openid-connect:*';
-
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Store pour les sessions (en production, utiliser Redis)
+const sessions = new Map();
 
 const corsOptions = {
   origin: process.env.CORS_ORIGIN,
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
 };
 
 app.use(cors(corsOptions));
@@ -30,16 +29,33 @@ app.use(express.json());
 // Configuration pour proxy de confiance (derrière reverse proxy)
 app.set('trust proxy', 1);
 
+// Configuration OAuth2 Authentik
+const OAUTH_CONFIG = {
+  clientId: process.env.AUTHENTIK_CLIENT_ID,
+  clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
+  issuer: process.env.AUTHENTIK_ISSUER,
+  redirectUri: `${process.env.BASE_URL}/callback`,
+  tokenEndpoint: `${process.env.AUTHENTIK_ISSUER}token/`,
+  authorizationEndpoint: `${process.env.AUTHENTIK_ISSUER.replace('/o/', '/application/o/')}authorize/`,
+  userInfoEndpoint: `${process.env.AUTHENTIK_ISSUER}userinfo/`,
+  scope: 'openid profile email groups',
+};
+
+console.log('🔧 Configuration OAuth2:');
+console.log('   Redirect URI:', OAUTH_CONFIG.redirectUri);
+console.log('   Token Endpoint:', OAUTH_CONFIG.tokenEndpoint);
+console.log('   Authorization Endpoint:', OAUTH_CONFIG.authorizationEndpoint);
+
 // Middleware de logging pour toutes les requêtes
 app.use((req, res, next) => {
   const startTime = Date.now();
   const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  req.requestId = requestId;
   
   // Logger la requête entrante
   console.log(`\n➡️  [${new Date().toISOString()}] [${requestId}]`);
   console.log(`   Méthode: ${req.method}`);
   console.log(`   Path: ${req.path}`);
-  console.log(`   User: ${req.oidc?.user?.email || req.userInfo?.username || 'Non authentifié'}`);
   
   // Intercepter la réponse
   const originalJson = res.json;
@@ -59,78 +75,191 @@ app.use((req, res, next) => {
   next();
 });
 
-// Configuration OIDC avec Authentik
-console.log('🔧 Configuration OIDC:');
-console.log('   BASE_URL:', process.env.BASE_URL);
-console.log('   CORS_ORIGIN:', process.env.CORS_ORIGIN);
-console.log('   AUTHENTIK_ISSUER:', process.env.AUTHENTIK_ISSUER);
+// Helper: Générer un ID de session
+function generateSessionId() {
+  return crypto.randomBytes(32).toString('hex');
+}
 
-const oidcConfig = {
-  authRequired: false,
-  auth0Logout: true,
-  secret: process.env.SESSION_SECRET,
-  baseURL: process.env.BASE_URL,
-  clientID: process.env.AUTHENTIK_CLIENT_ID,
-  clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
-  issuerBaseURL: process.env.AUTHENTIK_ISSUER,
-  routes: {
-    callback: '/callback',
-    login: '/login',
-    logout: '/logout',
-    postLogoutRedirect: process.env.CORS_ORIGIN,
-  },
-  session: {
-    cookie: {
-      httpOnly: true,
-      secure: true, // Toujours sécurisé en HTTPS
-      sameSite: 'None', // Permet les requêtes cross-site (API et frontend sur domaines différents)
-      domain: '.oauth2.croci-monteiro.fr', // Cookie partagé entre tous les sous-domaines *.oauth2.croci-monteiro.fr
-    },
-    rolling: true,
-    rollingDuration: 24 * 60 * 60, // 24 heures
-  },
-  afterCallback: async (req, res, session) => {
-    // Après le callback réussi, rediriger vers le frontend
-    console.log('✅ Callback OIDC réussi, session créée pour:', session.claims?.email || session.claims?.sub);
-    return {
-      ...session,
-      returnTo: process.env.CORS_ORIGIN,
-    };
-  },
-};
+// Helper: Parser le cookie de session
+function getSessionFromCookie(req) {
+  const cookies = req.headers.cookie;
+  if (!cookies) return null;
+  
+  const sessionCookie = cookies.split(';').find(c => c.trim().startsWith('session_id='));
+  if (!sessionCookie) return null;
+  
+  const sessionId = sessionCookie.split('=')[1];
+  return sessions.get(sessionId);
+}
 
-// Middleware pour logger les détails du callback AVANT traitement par auth()
-app.use('/callback', (req, res, next) => {
-  console.log('🔍 Détails du callback AVANT traitement:');
-  console.log('   Full URL:', `${req.protocol}://${req.get('host')}${req.originalUrl}`);
-  console.log('   req.get("host"):', req.get('host'));
-  console.log('   req.hostname:', req.hostname);
-  console.log('   BASE_URL configuré:', process.env.BASE_URL);
-  console.log('   redirect_uri attendu:', `${process.env.BASE_URL}/callback`);
-  console.log('   Headers X-Forwarded:', {
-    proto: req.headers['x-forwarded-proto'],
-    host: req.headers['x-forwarded-host'],
-    for: req.headers['x-forwarded-for']
-  });
-  console.log('   Header Host original:', req.headers.host);
+// Middleware: Ajouter les infos utilisateur à la requête
+app.use((req, res, next) => {
+  const session = getSessionFromCookie(req);
+  if (session && session.user) {
+    req.user = session.user;
+    req.accessToken = session.accessToken;
+  }
   next();
 });
 
-// Appliquer le middleware auth une seule fois
-app.use(auth(oidcConfig));
-
-// Middleware spécifique pour gérer les erreurs de callback
-app.use((err, req, res, next) => {
-  if (err && err.name === 'BadRequestError' && req.path === '/callback') {
-    console.error('❌ Erreur interceptée au callback:');
-    console.error('   Message:', err.message);
-    console.error('   URL:', req.url);
-    
-    // Rediriger vers le frontend avec erreur
-    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=${encodeURIComponent('Authentication failed')}`);
-  }
-  next(err);
+// Route: Login - Redirige vers Authentik
+app.get('/login', (req, res) => {
+  const state = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString('hex');
+  
+  // Stocker le state temporairement (expire après 10 min)
+  sessions.set(`state_${state}`, { nonce, createdAt: Date.now() });
+  setTimeout(() => sessions.delete(`state_${state}`), 10 * 60 * 1000);
+  
+  const authUrl = new URL(OAUTH_CONFIG.authorizationEndpoint);
+  authUrl.searchParams.set('client_id', OAUTH_CONFIG.clientId);
+  authUrl.searchParams.set('redirect_uri', OAUTH_CONFIG.redirectUri);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', OAUTH_CONFIG.scope);
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('nonce', nonce);
+  
+  console.log('🔐 Redirection vers Authentik:', authUrl.toString());
+  res.redirect(authUrl.toString());
 });
+
+// Route: Callback - Reçoit le code d'Authentik et échange contre un token
+app.get('/callback', async (req, res) => {
+  const { code, state, error, error_description } = req.query;
+  
+  console.log('📥 Callback reçu:');
+  console.log('   Code:', code ? code.substring(0, 10) + '...' : 'absent');
+  console.log('   State:', state);
+  console.log('   Error:', error || 'aucune');
+  
+  if (error) {
+    console.error('❌ Erreur OAuth:', error, error_description);
+    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=${encodeURIComponent(error_description || error)}`);
+  }
+  
+  if (!code || !state) {
+    console.error('❌ Code ou state manquant');
+    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=missing_code_or_state`);
+  }
+  
+  // Vérifier le state
+  const storedState = sessions.get(`state_${state}`);
+  if (!storedState) {
+    console.error('❌ State invalide ou expiré');
+    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=invalid_state`);
+  }
+  sessions.delete(`state_${state}`);
+  
+  try {
+    // Échanger le code contre un token
+    console.log('🔄 Échange du code contre un token...');
+    console.log('   Token endpoint:', OAUTH_CONFIG.tokenEndpoint);
+    console.log('   Redirect URI:', OAUTH_CONFIG.redirectUri);
+    
+    const tokenResponse = await axios.post(
+      OAUTH_CONFIG.tokenEndpoint,
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: OAUTH_CONFIG.redirectUri,
+        client_id: OAUTH_CONFIG.clientId,
+        client_secret: OAUTH_CONFIG.clientSecret,
+      }).toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      }
+    );
+    
+    console.log('✅ Token reçu avec succès');
+    const { access_token, id_token, refresh_token } = tokenResponse.data;
+    
+    // Récupérer les infos utilisateur
+    console.log('👤 Récupération des infos utilisateur...');
+    const userInfoResponse = await axios.get(OAUTH_CONFIG.userInfoEndpoint, {
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+      },
+    });
+    
+    const userInfo = userInfoResponse.data;
+    console.log('✅ Infos utilisateur:', userInfo.email || userInfo.preferred_username);
+    
+    // Créer une session
+    const sessionId = generateSessionId();
+    sessions.set(sessionId, {
+      user: userInfo,
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      createdAt: Date.now(),
+    });
+    
+    // Nettoyer les anciennes sessions (garder max 24h)
+    for (const [key, value] of sessions.entries()) {
+      if (value.createdAt && Date.now() - value.createdAt > 24 * 60 * 60 * 1000) {
+        sessions.delete(key);
+      }
+    }
+    
+    // Définir le cookie de session
+    res.setHeader('Set-Cookie', [
+      `session_id=${sessionId}; HttpOnly; Secure; SameSite=None; Domain=.oauth2.croci-monteiro.fr; Path=/; Max-Age=${24 * 60 * 60}`,
+    ]);
+    
+    console.log('✅ Session créée, redirection vers le frontend');
+    res.redirect(process.env.CORS_ORIGIN);
+    
+  } catch (err) {
+    console.error('❌ Erreur lors de l\'échange du token:');
+    console.error('   Status:', err.response?.status);
+    console.error('   Data:', err.response?.data);
+    console.error('   Message:', err.message);
+    
+    const errorMsg = err.response?.data?.error_description || err.response?.data?.error || err.message;
+    res.redirect(`${process.env.CORS_ORIGIN}?auth_error=${encodeURIComponent(errorMsg)}`);
+  }
+});
+
+// Route: Logout
+app.get('/logout', (req, res) => {
+  const cookies = req.headers.cookie;
+  if (cookies) {
+    const sessionCookie = cookies.split(';').find(c => c.trim().startsWith('session_id='));
+    if (sessionCookie) {
+      const sessionId = sessionCookie.split('=')[1];
+      sessions.delete(sessionId);
+    }
+  }
+  
+  // Supprimer le cookie
+  res.setHeader('Set-Cookie', [
+    `session_id=; HttpOnly; Secure; SameSite=None; Domain=.oauth2.croci-monteiro.fr; Path=/; Max-Age=0`,
+  ]);
+  
+  // Rediriger vers Authentik logout
+  res.redirect(`https://connect.croci-monteiro.fr/application/o/myapp/end-session/`);
+});
+
+// Route: Whoami - Retourne les infos de l'utilisateur connecté
+app.get('/whoami', (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Non authentifié' });
+  }
+  
+  res.json({
+    username: req.user.preferred_username || req.user.name || req.user.email,
+    email: req.user.email,
+    groups: req.user.groups || [],
+    avatarUrl: req.user.email ? getGravatarUrl(req.user.email) : null,
+  });
+});
+
+// Helper: Générer URL Gravatar
+function getGravatarUrl(email) {
+  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+  return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=200`;
+}
 
 const uploadFolder = './uploads';
 if (!fs.existsSync(uploadFolder)) fs.mkdirSync(uploadFolder);
@@ -515,19 +644,8 @@ app.delete('/delete-service/:id', checkAuth, requireAdmin, (req, res) => {
   res.json({ status: 'supprimé', id });
 });
 
-// Gestionnaire d'erreur global pour les erreurs OIDC
+// Gestionnaire d'erreur global
 app.use((err, req, res, next) => {
-  if (err.name === 'BadRequestError' && err.message.includes('invalid_grant')) {
-    console.error('❌ Erreur OIDC invalid_grant:');
-    console.error('   URL de callback:', req.url);
-    console.error('   Cookies présents:', req.headers.cookie ? 'Oui' : 'Non');
-    console.error('   Détails:', err.message);
-    
-    // Rediriger vers le frontend avec un message d'erreur
-    return res.redirect(`${process.env.CORS_ORIGIN}?auth_error=invalid_grant`);
-  }
-  
-  // Autres erreurs
   console.error('❌ Erreur serveur:', err);
   res.status(err.status || 500).json({ 
     error: err.message || 'Erreur interne du serveur' 
