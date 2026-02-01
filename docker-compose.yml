@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  myapp-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: myapp-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=${PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-production}
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
+      - AUTHENTIK_REDIRECT_URI=${AUTHENTIK_REDIRECT_URI}
+      - BASE_URL=${BASE_URL}
+      - SESSION_SECRET=${SESSION_SECRET}
+    volumes:
+      # Persistance des données
+      - ./data:/app/data
+      # Persistance des uploads
+      - ./uploads:/app/uploads
+    networks:
+      - myapp-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/services"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  myapp-network:
+    driver: bridge
