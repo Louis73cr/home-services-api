@@ -107,6 +107,8 @@ const oidcConfig = {
 app.use('/callback', (req, res, next) => {
   console.log('🔍 Détails du callback AVANT traitement:');
   console.log('   Full URL:', `${req.protocol}://${req.get('host')}${req.originalUrl}`);
+  console.log('   req.get("host"):', req.get('host'));
+  console.log('   req.hostname:', req.hostname);
   console.log('   BASE_URL configuré:', process.env.BASE_URL);
   console.log('   redirect_uri attendu:', `${process.env.BASE_URL}/callback`);
   console.log('   Headers X-Forwarded:', {
@@ -114,6 +116,7 @@ app.use('/callback', (req, res, next) => {
     host: req.headers['x-forwarded-host'],
     for: req.headers['x-forwarded-for']
   });
+  console.log('   Header Host original:', req.headers.host);
   next();
 });
 
