@@ -229,6 +229,34 @@ if (process.env.NODE_ENV === 'development') {
 
 app.use('/uploads', express.static(uploadFolder));
 
+// Route de redirection après callback OIDC réussi
+app.get('/callback', (req, res, next) => {
+  // express-openid-connect gère automatiquement le callback
+  // On redirige ensuite vers le frontend
+  const returnTo = req.query.returnTo || process.env.CORS_ORIGIN || 'https://myapp.oauth2.croci-monteiro.fr';
+  console.log(`✅ Callback OIDC réussi, redirection vers: ${returnTo}`);
+  res.redirect(returnTo);
+});
+
+// Route /whoami pour obtenir les infos utilisateur
+app.get('/whoami', checkAuth, (req, res) => {
+  try {
+    const isAdmin = req.userInfo.groups?.includes('admin') || false;
+    console.log(`👤 Whoami: ${req.userInfo.username}, Admin: ${isAdmin}`);
+    
+    res.json({
+      username: req.userInfo.username,
+      displayName: req.userInfo.displayName || req.userInfo.username,
+      email: req.userInfo.email || null,
+      avatarUrl: req.userInfo.avatarUrl || null,
+      isAdmin,
+    });
+  } catch (error) {
+    console.error('❌ Erreur /whoami:', error.message);
+    res.status(500).json({ error: 'Erreur lors de la récupération des informations utilisateur' });
+  }
+});
+
 /**
  * @swagger
  * /services:
