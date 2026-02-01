@@ -241,20 +241,6 @@ app.get('/logout', (req, res) => {
   res.redirect(`https://connect.croci-monteiro.fr/application/o/myapp/end-session/`);
 });
 
-// Route: Whoami - Retourne les infos de l'utilisateur connecté
-app.get('/whoami', (req, res) => {
-  if (!req.user) {
-    return res.status(401).json({ error: 'Non authentifié' });
-  }
-  
-  res.json({
-    username: req.user.preferred_username || req.user.name || req.user.email,
-    email: req.user.email,
-    groups: req.user.groups || [],
-    avatarUrl: req.user.email ? getGravatarUrl(req.user.email) : null,
-  });
-});
-
 // Helper: Générer URL Gravatar
 function getGravatarUrl(email) {
   const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
@@ -369,7 +355,7 @@ function checkAuth(req, res, next) {
 
 /** Middleware pour vérifier que l'utilisateur est admin */
 function requireAdmin(req, res, next) {
-  if (!req.userInfo?.groups?.includes('admin')) {
+  if (!req.userInfo?.groups?.includes('myapp-admin')) {
     return res.status(403).json({ error: 'Accès réservé aux administrateurs' });
   }
   next();
@@ -418,7 +404,7 @@ app.use('/uploads', express.static(uploadFolder));
 // Route /whoami pour obtenir les infos utilisateur
 app.get('/whoami', checkAuth, (req, res) => {
   try {
-    const isAdmin = req.userInfo.groups?.includes('admin') || false;
+    const isAdmin = req.userInfo.groups?.includes('myapp-admin') || false;
     console.log(`👤 Whoami: ${req.userInfo.username}, Admin: ${isAdmin}`);
     
     res.json({
@@ -681,8 +667,9 @@ app.get('/whoami', checkAuth, (req, res) => {
   const username = req.userInfo.username;
   const displayName = req.userInfo.displayName || username;
   const email = req.userInfo.email || null;
-  const isAdmin = req.userInfo.groups.includes('admin');
-  res.json({ username, displayName, email, isAdmin });
+  const avatarUrl = req.userInfo.avatarUrl || null;
+  const isAdmin = req.userInfo.groups.includes('myapp-admin');
+  res.json({ username, displayName, email, avatarUrl, isAdmin });
 });
 
 /**
