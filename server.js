@@ -73,10 +73,6 @@ const oidcConfig = {
   clientID: process.env.AUTHENTIK_CLIENT_ID,
   clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
   issuerBaseURL: process.env.AUTHENTIK_ISSUER,
-  authorizationParams: {
-    response_type: 'code',
-    scope: 'openid profile email groups',
-  },
   routes: {
     callback: '/callback',
     login: '/login',
