@@ -51,7 +51,6 @@ app.use((req, res, next) => {
   const startTime = Date.now();
   const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   req.requestId = requestId;
-  
   // Logger la requête entrante
   console.log(`\n➡️  [${new Date().toISOString()}] [${requestId}]`);
   console.log(`   Méthode: ${req.method}`);
@@ -222,23 +221,57 @@ app.get('/callback', async (req, res) => {
 });
 
 // Route: Logout
-app.get('/logout', (req, res) => {
+app.get('/logout', async (req, res) => {
   const cookies = req.headers.cookie;
+  let accessToken = null;
+  
   if (cookies) {
     const sessionCookie = cookies.split(';').find(c => c.trim().startsWith('session_id='));
     if (sessionCookie) {
-      const sessionId = sessionCookie.split('=')[1];
+      const sessionId = sessionCookie.split('=')[1].trim();
+      const session = sessions.get(sessionId);
+      
+      // Récupérer le token pour le révoquer
+      if (session) {
+        accessToken = session.accessToken;
+      }
+      
+      // Supprimer la session du store
       sessions.delete(sessionId);
+      console.log('🗑️ Session supprimée:', sessionId.substring(0, 10) + '...');
     }
   }
   
-  // Supprimer le cookie
+  // Révoquer le token auprès d'Authentik (best effort)
+  if (accessToken && OAUTH_CONFIG.clientId && OAUTH_CONFIG.clientSecret) {
+    try {
+      await axios.post(
+        'https://connect.croci-monteiro.fr/application/o/revoke/',
+        new URLSearchParams({
+          token: accessToken,
+          client_id: OAUTH_CONFIG.clientId,
+          client_secret: OAUTH_CONFIG.clientSecret,
+        }).toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        }
+      );
+      console.log('✅ Token révoqué auprès d\'Authentik');
+    } catch (err) {
+      console.warn('⚠️ Impossible de révoquer le token:', err.message);
+    }
+  }
+  
+  // Supprimer le cookie - utiliser le même domaine que lors de la création
   res.setHeader('Set-Cookie', [
-    `session_id=; HttpOnly; Secure; SameSite=None; Domain=.oauth2.croci-monteiro.fr; Path=/; Max-Age=0`,
+    `session_id=; HttpOnly; Secure; SameSite=None; Domain=.oauth2.croci-monteiro.fr; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
   ]);
   
-  // Rediriger vers Authentik logout
-  res.redirect(`https://connect.croci-monteiro.fr/application/o/myapp/end-session/`);
+  // Construire l'URL de redirection post-logout vers le frontend
+  const postLogoutRedirect = encodeURIComponent(process.env.CORS_ORIGIN || 'http://localhost:3001');
+  
+  // Rediriger vers Authentik logout avec redirection vers le frontend
+  res.redirect(`https://connect.croci-monteiro.fr/application/o/myapp/end-session/?post_logout_redirect_uri=${postLogoutRedirect}`);
 });
 
 // Helper: Générer URL Gravatar
